@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.pt
+*.engine
+*.onnx
+*.zip
+log.txt
+*.log
+.env
+runs/

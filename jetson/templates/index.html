@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>MiniX</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="flood" class="flood"></div>
+
+<header class="bar">
+  <span class="mark">MiniX</span>
+  <span class="sub">ADAS domain ECU &middot; 1:10 scale</span>
+  <span id="link" class="link">link</span>
+</header>
+
+<main>
+
+  <section class="viewport">
+    <img id="cam" src="/video" alt="forward camera">
+    <div class="overlay">
+      <span id="fps" class="fps">--</span>
+    </div>
+
+    <aside class="ladder" aria-hidden="true">
+      <div class="tick t-brake"><span>30</span></div>
+      <div class="tick t-warn"><span>60</span></div>
+      <div id="fill" class="fill"></div>
+    </aside>
+  </section>
+
+  <section class="telltales">
+    <div id="tt-aeb" class="tt">
+      <span class="glyph">((&nbsp;!&nbsp;))</span>
+      <span class="name">AEB</span>
+      <span id="aeb-val" class="val">clear</span>
+    </div>
+    <div id="tt-ldw" class="tt">
+      <span class="glyph">|&nbsp;&nbsp;|</span>
+      <span class="name">LDW</span>
+      <span id="ldw-val" class="val">--</span>
+    </div>
+    <div class="tt readout">
+      <span class="name">Range</span>
+      <span id="dist" class="big">---</span><span class="unit">cm</span>
+    </div>
+    <div class="tt readout">
+      <span class="name">Drive L / R</span>
+      <span id="lr" class="big">0 / 0</span>
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="pad">
+      <button class="btn hold" data-act="forward">Forward</button>
+      <button class="btn hold" data-act="left">Left</button>
+      <button class="btn hold" data-act="right">Right</button>
+      <button class="btn hold" data-act="reverse">Reverse</button>
+      <button class="btn hold" data-act="center">Center</button>
+    </div>
+
+    <div class="joywrap">
+      <span class="joylabel">Drive (drag to steer + accelerate)</span>
+      <div id="joystick" class="joystick">
+        <div id="joyknob" class="joyknob"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <label class="speed">
+        Speed <output id="spd-out">150</output>
+        <input id="spd" type="range" min="60" max="255" value="150">
+      </label>
+      <button id="stop" class="btn wide">Stop</button>
+      <button id="ebrake" class="btn danger">Emergency brake</button>
+    </div>
+
+    <div class="row">
+      <button id="lka-toggle" class="btn wide">LKA: On</button>
+    </div>
+
+    <div class="row">
+      <button id="detect-toggle" class="btn wide">Object Detection: Off</button>
+    </div>
+  </section>
+
+  <footer class="log">
+    <span>AEB interventions</span><span id="events">0</span>
+  </footer>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

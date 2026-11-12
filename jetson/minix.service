@@ -1,0 +1,22 @@
+[Unit]
+Description=MiniX drive/video/ADAS web server
+# Soft hint only — don't hard-require this device unit. systemd only
+# generates dev-ttyUSB0.device under specific udev conditions, and a
+# strict Requires= here can fail the whole service before it even tries
+# to start. Restart=on-failure below handles the case where the
+# Arduino isn't plugged in yet at boot.
+After=network.target dev-ttyUSB0.device
+
+[Service]
+Type=simple
+User=sreekumar
+WorkingDirectory=/home/sreekumar/minix/jetson
+ExecStart=/home/sreekumar/minix/jetson/venv/bin/python3 app.py
+Restart=on-failure
+RestartSec=2
+# Keep the last N runs of logs in journalctl -u minix
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
