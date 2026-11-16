@@ -37,8 +37,10 @@ def _pipeline(device, w, h, fps):
 
 class Camera:
     def __init__(self, device, width, height, fps, quality, ldw=None,
-                 detect_engine_path=DEFAULT_ENGINE_PATH):
+                 detect_engine_path=DEFAULT_ENGINE_PATH, target=None):
         self.ldw = ldw
+        self.target = target       # adas/target_detect.TargetDetector or None
+        self._raw = None           # latest unannotated frame (for "Learn target")
         self.quality = quality
         self.fps_measured = 0.0
         self.detect_engine_path = detect_engine_path
@@ -128,8 +130,15 @@ class Camera:
                     # camera thread — log once per failure, show the raw
                     # frame instead, and keep the loop alive.
                     logger.warning("Detection inference failed: %s", e)
-            elif self.ldw is not None:
-                frame = self.ldw.process(frame)
+            else:
+                if self.target is not None:
+                    self.target.process(frame)          # raw frame, before overlays
+                    if self._frame_n % 3 == 0:
+                        self._raw = frame.copy()
+                if self.ldw is not None:
+                    frame = self.ldw.process(frame)
+                if self.target is not None:
+                    frame = self.target.draw(frame)
 
             ok, buf = cv2.imencode(".jpg", frame, params)
             if ok:
@@ -150,6 +159,11 @@ class Camera:
         sharp = cv2.Laplacian(gray, cv2.CV_64F).var()
         return {"bright": float(mean[0][0]), "contrast": float(std[0][0]),
                 "sharp": float(sharp)}
+
+    def raw_frame(self):
+        """Latest unannotated frame (copy), or None."""
+        f = self._raw
+        return None if f is None else f.copy()
 
     def frame(self):
         with self._lock:

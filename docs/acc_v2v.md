@@ -15,6 +15,7 @@ MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ───
 | File | Role |
 |------|------|
 | `jetson/adas/acc.py` | ACC decision layer: mode selection, gap control, rate limits. Pure logic. |
+| `jetson/adas/target_detect.py` | Camera detection of the target car (classical CV, runs every frame next to LDW). Learn/forget from the UI; model saved to `jetson/target_model.json` (not in git). |
 | `jetson/v2v.py` | UDP receiver for target telemetry. Fail-safe: `.ok` False if the port can't be bound. Also a CLI (`python3 v2v.py`). |
 | `jetson/app.py` | `acc_step()` in `adas_loop`, `acc_on`/`acc_off`/`v2v_zero` actions in `/cmd`, `acc`/`v2v`/`cam_quality` in `/status`. |
 | `jetson/camera.py` | Adds `last_frame_ts` and `image_quality` (brightness, contrast, sharpness) per frame. |
@@ -27,7 +28,7 @@ MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ───
 
 | Mode | When | Gap from | Lead speed from |
 |------|------|----------|-----------------|
-| **CAMERA** (default) | camera healthy **and** road readable | ultrasonic | ultrasonic range rate + integrator |
+| **CAMERA** (default) | camera healthy **and** road or target car readable | ultrasonic; camera estimate when no echo (nearer of the two when both) | range rate + integrator |
 | **V2V** | camera bad for `ACC_TO_V2V_S` (0.5 s) and target packets fresh | ultrasonic (if echo) | target telemetry (speed + accel feed-forward) |
 | **FAULT** | camera bad and no fresh V2V, or Arduino link down | — | ACC disengages, car stops |
 
@@ -39,10 +40,25 @@ goes straight back to CAMERA.
 mean brightness within `ACC_CAM_MIN/MAX_BRIGHT`, contrast ≥
 `ACC_CAM_MIN_CONTRAST`, sharpness (Laplacian variance) ≥
 `ACC_CAM_MIN_SHARPNESS`, and (if `ACC_CAM_REQUIRE_LANES`) LDW found lanes
-in ≥ `ACC_CAM_LANE_RATIO` of the last `ACC_CAM_LANE_WINDOW_S` seconds.
+**or saw the learned target car** in ≥ `ACC_CAM_LANE_RATIO` of the last
+`ACC_CAM_LANE_WINDOW_S` seconds.
 Live values are in `/status` → `cam_quality`, so thresholds can be tuned
-at the venue. **If the test area has no lane markings, set
-`ACC_CAM_REQUIRE_LANES = False`**, otherwise ACC will always run in V2V.
+at the venue. With no lane markings, learning the target car is enough for camera mode.
+To skip the scene check entirely (bench tests), set
+`ACC_CAM_REQUIRE_LANES = False`.
+
+### Target car detection (`adas/target_detect.py`)
+
+The black mecanum car on the light floor is found as a compact dark
+region in the lower part of the image, filtered by size, shape and
+solidity; regions cut off by one side of the frame (desks, walls) are
+ignored. It works roughly before learning; **Learn target car** (web UI)
+makes it specific: put the car straight ahead of MiniX at 40–150 cm and
+press it. That stores the car's grey-level histogram, shape and darkness,
+and — using the ultrasonic reading at that moment — a width × distance
+constant so the camera can estimate distance from the box width alone.
+Re-learn when the lighting or venue changes. The video shows a green
+**TARGET** box with score and estimated distance.
 
 Object detection (YOLO) is still a separate mode that blocks driving,
 so it is not used for lead-vehicle confirmation here; turning it on
@@ -54,8 +70,10 @@ disengages ACC.
   feed-forward + `ACC_KP`·gap error + `ACC_KD`·range rate.
   Feed-forward is an integrator in CAMERA mode, and
   `v_lead·ACC_PWM_PER_MPS + ACC_KA·a_lead` in V2V mode.
-- Stops if gap < `ACC_STOP_GAP_CM` (60 cm) and not opening, or (V2V) the
-  lead has stopped. Ramp limits give smooth starts and firmer stops.
+- Stops if the gap predicted `ACC_STOP_LOOKAHEAD_S` ahead is below
+  `ACC_STOP_GAP_CM` (60 cm), or (V2V) the lead has stopped; after a stop it
+  waits until the gap reopens to `ACC_RESTART_GAP_CM` (75 cm), so it doesn't
+  creep at the stop line behind a lead slower than MiniX's minimum speed. Ramp limits give smooth starts and firmer stops.
 - No lead within `ACC_DETECT_CM` → cruise at the speed slider value. In
   V2V mode with the lead beyond ultrasonic range, speed is capped at the
   lead's speed + `ACC_V2V_BLIND_MARGIN_MPS`.
@@ -79,7 +97,8 @@ fixed slider value, time it over a known distance, PWM ÷ m/s.
 - If no browser polls `/status` for `ACC_UI_HEARTBEAT_S` (1 s), ACC
   disengages and stops — ACC resends `F` itself, so without this the
   Arduino watchdog would stay fed with nobody watching.
-- **Zero target** resets the target's distance/x/y/heading (UDP `ZERO`).
+- **Zero V2V** resets the target's distance/x/y/heading (UDP `ZERO`).
+- **Learn target car / Forget**: see Target car detection above.
 
 ## V2V packet (target → Jetson, UDP 5005, 50 Hz, 56 bytes, little-endian)
 

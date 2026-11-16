@@ -6,6 +6,7 @@ Then open http://<jetson-ip>:5000 from the phone or laptop.
 """
 
 import atexit
+import os
 import threading
 import time
 
@@ -15,6 +16,7 @@ import config
 from adas.acc import ACC
 from adas.aeb import AEB
 from adas.ldw import LDW
+from adas.target_detect import TargetDetector
 from camera import Camera
 from oled_display import OLEDStatus
 from serial_link import SerialLink
@@ -24,8 +26,10 @@ app = Flask(__name__)
 
 link = SerialLink(config.SERIAL_PORT, config.SERIAL_BAUD)
 ldw = LDW(config.LDW_OFFSET_WARN) if config.LDW_ENABLED else None
+target = TargetDetector(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "target_model.json"))
 cam = Camera(config.CAM_DEVICE, config.CAM_WIDTH, config.CAM_HEIGHT,
-             config.CAM_FPS, config.JPEG_QUALITY, ldw)
+             config.CAM_FPS, config.JPEG_QUALITY, ldw, target=target)
 aeb = AEB(config.AEB_WARN_CM, config.AEB_BRAKE_CM)
 oled = OLEDStatus()  # fails safe — .ok is False if the display isn't wired/detected
 v2v = TargetReceiver(config.V2V_PORT, config.V2V_CMD_PORT, config.V2V_STALE_S)  # fails safe — .ok
@@ -58,7 +62,7 @@ def acc_step(s, now, state):
     with acc_lock:
         if not acc.enabled:
             # still evaluate sensors so the UI shows camera/V2V health
-            acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed)
+            acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target)
             return
         if cam.detect_mode:
             acc.disengage("object detection mode")
@@ -68,7 +72,7 @@ def acc_step(s, now, state):
             acc.disengage("driver UI lost")
             link.stop()
             return
-        out = acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed)
+        out = acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target)
 
     if out["action"] == "disengage":
         link.stop()
@@ -176,6 +180,7 @@ def status():
         lka_events=lka_events,
         detect_mode=cam.detect_mode,
         acc=acc.status(),
+        target=target.status(),
         v2v=v2v.status(),
         cam_quality={k: round(v, 1) for k, v in (cam.image_quality or {}).items()},
         fps=round(cam.fps_measured, 1),
@@ -218,6 +223,15 @@ def cmd():
             acc.disengage("driver switched off")
         link.stop()
         return jsonify(ok=True)
+    if action == "learn_target":
+        if cam.detect_mode:
+            return jsonify(ok=False, error="turn off object detection first"), 409
+        d = link.snapshot()["dist"]
+        ok, msg = target.learn(cam.raw_frame(), d if d < 999 else None)
+        return jsonify(ok=ok, message=msg, error=None if ok else msg)
+    if action == "forget_target":
+        target.forget()
+        return jsonify(ok=True, message="target model cleared")
     if action == "v2v_zero":
         ok, error = v2v.send_cmd("ZERO")
         return jsonify(ok=ok, error=error)

@@ -10,3 +10,4 @@ log.txt
 *.log
 .env
 runs/
+jetson/target_model.json

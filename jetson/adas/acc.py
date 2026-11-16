@@ -5,11 +5,15 @@ applies the result to the serial link. That keeps it testable off the car.
 
 Sensor modes
 ------------
-CAMERA  (default)  gap + closing rate from the HC-SR04 ultrasonic; the
-                   camera must be healthy (fresh frames, fps, exposure,
-                   contrast, sharpness) and able to read the road (lanes
-                   found in a good share of recent frames). Speed is held
-                   by a PI loop on gap error + D on range rate.
+CAMERA  (default)  camera + ultrasonic. The camera must be healthy (fresh
+                   frames, fps, exposure, contrast, sharpness) and able to
+                   read the scene: lanes found, or the learned target car
+                   seen (adas/target_detect.py), in a good share of recent
+                   frames. Gap = ultrasonic, or the camera's distance
+                   estimate from the target's box width when the
+                   ultrasonic has no echo (the nearer of the two when both
+                   exist). Speed is held by a PI loop on gap error + D on
+                   range rate.
 V2V     (fallback) camera can't see the road/vehicles properly -> lead
                    speed and acceleration come from the target vehicle
                    over Wi-Fi (v2v.py). Ultrasonic still gives the gap
@@ -51,9 +55,13 @@ class ACC:
         self._bad_since = None
         self._good_since = None
         self._last_t = None
-        self._last_dist = None
         self._last_dist_ts = None
-        self._lanes = collections.deque()   # (t, lanes_seen)
+        self._lanes = collections.deque()   # (t, lanes_seen or target_seen)
+        self.gap_src = None        # 'ultrasonic' | 'camera' | None
+        self._held = False         # stopped behind the lead; wait for the gap to reopen
+        self.target_seen = False
+        self._prev_gap = None
+        self._prev_gap_t = None
 
     # ---------- engagement ----------
     def engage(self, now):
@@ -62,6 +70,7 @@ class ACC:
         self.reason = "engaged"
         self.pwm = 0.0
         self._integ = 0.0
+        self._held = False
         self._using_v2v = False
         self._bad_since = self._good_since = None
         self._last_t = now
@@ -76,12 +85,14 @@ class ACC:
         self.decile = 0
 
     # ---------- camera health ----------
-    def camera_health(self, now, cam, ldw):
+    def camera_health(self, now, cam, ldw, target=None):
         """Return (ok, reason). cam exposes .ok, .fps_measured,
 .last_frame_ts and .image_quality = {bright, contrast, sharp}."""
         c = self.c
-        if ldw is not None:
-            self._lanes.append((now, bool(ldw.lanes_seen)))
+        if ldw is not None or target is not None:
+            scene = bool(ldw is not None and ldw.lanes_seen) or \
+                    bool(target is not None and target.seen)
+            self._lanes.append((now, scene))
         while self._lanes and now - self._lanes[0][0] > c.ACC_CAM_LANE_WINDOW_S:
             self._lanes.popleft()
 
@@ -102,41 +113,59 @@ class ACC:
             if q["sharp"] < c.ACC_CAM_MIN_SHARPNESS:
                 return False, "blurred"
         if c.ACC_CAM_REQUIRE_LANES:
-            if ldw is None:
+            if ldw is None and target is None:
                 return False, "LDW off"
-            # need a full window of history before judging the road
+            # need a full window of history before judging the scene
             if self._lanes and now - self._lanes[0][0] >= 0.8 * c.ACC_CAM_LANE_WINDOW_S:
                 ratio = sum(1 for _, s in self._lanes if s) / len(self._lanes)
                 if ratio < c.ACC_CAM_LANE_RATIO:
-                    return False, f"road not readable ({ratio:.0%} lanes)"
+                    return False, f"can't read road/vehicle ({ratio:.0%})"
         return True, "ok"
 
     # ---------- main step ----------
-    def update(self, now, snap, cam, ldw, lead_pkt, v2v_fresh, set_pwm):
+    def update(self, now, snap, cam, ldw, lead_pkt, v2v_fresh, set_pwm, target=None):
         """One control step. Returns dict(action, pwm, decile, reason)
         where action is 'drive' | 'stop' | 'disengage'."""
         c = self.c
         dt = min(0.2, max(0.0, now - (self._last_t or now)))
         self._last_t = now
 
-        # --- ultrasonic gap + range rate (only on new readings) ---
+        # --- mode selection inputs ---
+        self.cam_ok, self.cam_reason = self.camera_health(now, cam, ldw, target)
+        self.target_seen = bool(target is not None and target.seen)
+
+        # --- gap: ultrasonic and/or camera estimate of the learned target ---
         dist = snap.get("dist", 999)
         dts = snap.get("dist_ts")
-        if dts is not None and dts != self._last_dist_ts:
-            if dist < 999 and self._last_dist is not None and self._last_dist < 999:
-                ddt = dts - self._last_dist_ts
-                if 0.02 < ddt < 1.0:
-                    raw = (dist - self._last_dist) / ddt
-                    raw = max(-300.0, min(300.0, raw))
-                    self.range_rate = 0.6 * self.range_rate + 0.4 * raw
-            elif dist >= 999:
-                self.range_rate = 0.0
-            self._last_dist, self._last_dist_ts = dist, dts
-        self.gap = dist if dist < 999 else None
-        self.lead = self.gap is not None and self.gap < c.ACC_DETECT_CM
+        us_gap = dist if dist < 999 else None
+        cam_gap = None
+        if (self.cam_ok and not self._using_v2v and self.target_seen
+                and target.est_cm and abs(target.offset) < 0.5):
+            cam_gap = float(target.est_cm)
+        if us_gap is not None and cam_gap is not None:
+            gap, src = min(us_gap, cam_gap), ("ultrasonic" if us_gap <= cam_gap else "camera")
+        elif us_gap is not None:
+            gap, src = us_gap, "ultrasonic"
+        elif cam_gap is not None:
+            gap, src = cam_gap, "camera"
+        else:
+            gap, src = None, None
 
-        # --- mode selection ---
-        self.cam_ok, self.cam_reason = self.camera_health(now, cam, ldw)
+        # range rate: ultrasonic only on new readings, camera every step
+        new_sample = (src == "camera") or (src == "ultrasonic" and dts != self._last_dist_ts)
+        if gap is None or src != self.gap_src:
+            self.range_rate = 0.0 if gap is None else self.range_rate
+            self._prev_gap, self._prev_gap_t = gap, now
+        elif new_sample:
+            ddt = now - (self._prev_gap_t or now)
+            if 0.02 < ddt < 1.0:
+                raw = max(-300.0, min(300.0, (gap - self._prev_gap) / ddt))
+                a = 0.4 if src == "ultrasonic" else 0.15     # camera estimate is noisier
+                self.range_rate = (1 - a) * self.range_rate + a * raw
+            self._prev_gap, self._prev_gap_t = gap, now
+        self._last_dist_ts = dts
+        self.gap, self.gap_src = (int(gap) if gap is not None else None), src
+        self.lead = self.gap is not None and self.gap < c.ACC_DETECT_CM
         if not self.enabled:
             return {"action": "stop", "pwm": 0, "decile": 0, "reason": self.reason}
         if not snap.get("link_ok", False):
@@ -188,12 +217,23 @@ class ACC:
                 ff = self._integ
             target = ff + c.ACC_KP * err + c.ACC_KD * self.range_rate
 
-            if self.gap < c.ACC_STOP_GAP_CM and self.range_rate <= 5:
+            # stop on the gap predicted ACC_STOP_LOOKAHEAD_S ahead, so motor
+            # lag doesn't carry MiniX below the stop gap (or into AEB range)
+            predicted = self.gap + min(0.0, self.range_rate) * c.ACC_STOP_LOOKAHEAD_S
+            if predicted < c.ACC_STOP_GAP_CM and self.range_rate <= 5:
+                self._held = True
+            elif self.gap >= c.ACC_RESTART_GAP_CM:
+                self._held = False
+            if self._held:
+                # creeping at the stop line just ends in a coast past it; stay
+                # stopped until the gap has reopened to ACC_RESTART_GAP_CM
                 target = 0.0
+                self._integ = min(self._integ, float(c.ACC_PWM_MIN_MOVE))
             if (self.mode == V2V and lead_pkt["v_mps"] < 0.05
                     and self.gap < c.ACC_GAP_CM + 20):
                 target = 0.0                       # lead has stopped: stop behind it
         else:
+            self._held = False
             # free road (or lead beyond ultrasonic range). In V2V mode the
             # lead is known to exist, so don't exceed it by much while blind.
             if self.mode == V2V and lead_pkt and lead_pkt["v_mps"] > 0.05:
@@ -234,6 +274,8 @@ class ACC:
             "range_rate": round(self.range_rate, 1),
             "pwm": int(self.pwm),
             "decile": self.decile,
+            "gap_src": self.gap_src,
+            "target_seen": self.target_seen,
             "cam_ok": self.cam_ok,
             "cam_reason": self.cam_reason,
         }

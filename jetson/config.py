@@ -30,6 +30,8 @@ LDW_OFFSET_WARN = 0.18   # lane-centre offset as fraction of frame width
 # Gap / speed (the Arduino speed command is a 0-9 decile, ~28 PWM per step)
 ACC_GAP_CM = 80            # desired following gap; keep it above AEB_BRAKE_CM
 ACC_STOP_GAP_CM = 60       # closer than this and not opening -> ACC stops the car
+ACC_STOP_LOOKAHEAD_S = 0.6 # stop early on the gap predicted this far ahead (motor lag)
+ACC_RESTART_GAP_CM = 75    # after a stop, move again only once the gap reopens to this
 ACC_DETECT_CM = 250        # ultrasonic beyond this = no lead in range -> cruise
 ACC_KP = 0.8               # PWM per cm of gap error
 ACC_KI = 0.4               # PWM/s per cm of gap error (camera mode integrator)
@@ -49,8 +51,9 @@ ACC_CAM_MIN_BRIGHT = 35    # mean grey level 0-255
 ACC_CAM_MAX_BRIGHT = 220
 ACC_CAM_MIN_CONTRAST = 18  # grey std-dev
 ACC_CAM_MIN_SHARPNESS = 40 # variance of Laplacian (blur / dirty lens)
-ACC_CAM_REQUIRE_LANES = True   # camera must also read the road (LDW lanes)
-ACC_CAM_LANE_RATIO = 0.4       # share of frames with lanes in the window
+ACC_CAM_REQUIRE_LANES = True   # camera must also read the scene: LDW lanes OR the
+                               # learned target car (adas/target_detect.py)
+ACC_CAM_LANE_RATIO = 0.4       # share of frames with lanes/target in the window
 ACC_CAM_LANE_WINDOW_S = 2.0
 ACC_TO_V2V_S = 0.5         # camera bad this long -> V2V
 ACC_TO_CAMERA_S = 2.0      # camera good this long -> back to camera

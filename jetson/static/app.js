@@ -93,6 +93,19 @@ document.getElementById('v2v-zero').addEventListener('click', () => {
   });
 });
 
+// ---- Target car learning (camera) ----
+function targetCmd(action) {
+  fetch('/cmd', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action })
+  }).then(r => r.json()).then(j => alert(j.ok ? j.message : 'Failed: ' + j.error))
+    .catch(() => alert('Request failed — check the connection.'));
+}
+document.getElementById('learn-target').addEventListener('click', () => targetCmd('learn_target'));
+document.getElementById('forget-target').addEventListener('click', () => {
+  if (confirm('Forget the learned target car?')) targetCmd('forget_target');
+});
+
 // ---- Object detection on/off toggle ----
 // "When YOLO runs, nothing else runs" — the server enforces this by
 // rejecting drive commands outright, but we also grey out the controls
@@ -279,11 +292,14 @@ function apply(s) {
   if (s.acc) {
     const a = s.acc;
     if (a.enabled !== accEnabled) setAccUI(a.enabled);
+    const t = s.target || {};
+    const tgt = !t.learned ? 'not learned' : (t.seen ? 'target ✓' : 'no target');
     el.accMode.textContent = a.enabled ? a.mode.toUpperCase()
       : (a.cam_ok ? 'cam ok' : 'cam: ' + a.cam_reason);
     el.accVal.textContent = a.enabled
-      ? (a.lead ? 'follow ' + a.gap_cm + ' cm' : 'cruise') + ' · ' + a.decile + '/9'
-      : (a.mode === 'fault' ? 'fault' : 'off');
+      ? (a.lead ? 'follow ' + a.gap_cm + ' cm (' + (a.gap_src === 'camera' ? 'cam' : 'us') + ')'
+                : 'cruise') + ' · ' + a.decile + '/9 · ' + tgt
+      : (a.mode === 'fault' ? 'fault' : 'off') + ' · ' + tgt;
     el.acc.className = 'tt ' + (
       a.mode === 'fault' ? 'alarm' :
       !a.enabled ? '' :
