@@ -62,6 +62,37 @@ lkaBtn.addEventListener('click', () => {
   lkaBtn.classList.toggle('active', lkaEnabled);
 });
 
+// ---- ACC on/off ----
+// Engaging ACC makes the car drive by itself (up to the slider speed),
+// so it goes through the server and only flips the button on success.
+const accBtn = document.getElementById('acc-toggle');
+let accEnabled = false;
+function setAccUI(on) {
+  accEnabled = on;
+  accBtn.textContent = 'ACC: ' + (on ? 'On' : 'Off');
+  accBtn.classList.toggle('active', on);
+}
+accBtn.addEventListener('click', () => {
+  const turningOn = !accEnabled;
+  fetch('/cmd', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(turningOn
+      ? { action: 'acc_on', speed: parseInt(spd.value, 10) }
+      : { action: 'acc_off' })
+  }).then(r => r.json()).then(j => {
+    if (!j.ok) { alert('ACC not available: ' + j.error); return; }
+    setAccUI(turningOn);
+  }).catch(() => alert('Request failed — check the connection.'));
+});
+document.getElementById('v2v-zero').addEventListener('click', () => {
+  fetch('/cmd', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'v2v_zero' })
+  }).then(r => r.json()).then(j => {
+    if (!j.ok) alert('Zero failed: ' + j.error);
+  });
+});
+
 // ---- Object detection on/off toggle ----
 // "When YOLO runs, nothing else runs" — the server enforces this by
 // rejecting drive commands outright, but we also grey out the controls
@@ -193,6 +224,12 @@ const el = {
   fill: document.getElementById('fill'),
   fps: document.getElementById('fps'),
   link: document.getElementById('link'),
+  acc: document.getElementById('tt-acc'),
+  accVal: document.getElementById('acc-val'),
+  accMode: document.getElementById('acc-mode'),
+  accReason: document.getElementById('acc-reason'),
+  v2v: document.getElementById('tt-v2v'),
+  v2vVal: document.getElementById('v2v-val'),
   events: document.getElementById('events'),
   flood: document.getElementById('flood')
 };
@@ -237,6 +274,35 @@ function apply(s) {
 
   if (typeof s.detect_mode === 'boolean' && s.detect_mode !== detectMode) {
     setDetectUI(s.detect_mode);
+  }
+
+  if (s.acc) {
+    const a = s.acc;
+    if (a.enabled !== accEnabled) setAccUI(a.enabled);
+    el.accMode.textContent = a.enabled ? a.mode.toUpperCase()
+      : (a.cam_ok ? 'cam ok' : 'cam: ' + a.cam_reason);
+    el.accVal.textContent = a.enabled
+      ? (a.lead ? 'follow ' + a.gap_cm + ' cm' : 'cruise') + ' · ' + a.decile + '/9'
+      : (a.mode === 'fault' ? 'fault' : 'off');
+    el.acc.className = 'tt ' + (
+      a.mode === 'fault' ? 'alarm' :
+      !a.enabled ? '' :
+      a.mode === 'v2v' ? 'caution' : 'engaged');
+    el.accReason.textContent = a.reason ? 'ACC: ' + a.reason : '';
+  }
+  if (s.v2v) {
+    const v = s.v2v;
+    if (!v.ok) {
+      el.v2vVal.textContent = 'port busy';
+      el.v2v.className = 'tt alarm';
+    } else if (v.fresh) {
+      el.v2vVal.textContent = v.v_mps.toFixed(2) + ' m/s  ' +
+        (v.ax_mps2 >= 0 ? '+' : '') + v.ax_mps2.toFixed(2) + ' m/s²';
+      el.v2v.className = 'tt good';
+    } else {
+      el.v2vVal.textContent = v.age_ms === null ? 'no data' : 'lost';
+      el.v2v.className = 'tt';
+    }
   }
 
   el.flood.classList.toggle('on', s.aeb === 'braking');

@@ -312,3 +312,14 @@ main { max-width: 620px; margin: 0 auto; padding: 12px; }
   color: var(--dim);
 }
 #events { font-family: var(--mono); color: var(--ink); }
+
+/* --- ACC --- */
+.acc-note {
+  font-size: 11px;
+  color: var(--dim);
+  padding: 2px 2px 8px;
+  line-height: 1.4;
+}
+#acc-reason { display: block; color: var(--amber); font-family: var(--mono); }
+.tt.engaged { background: #0c2219; }
+.tt.engaged .glyph, .tt.engaged .val { color: var(--mint); }

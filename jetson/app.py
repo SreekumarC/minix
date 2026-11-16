@@ -12,11 +12,13 @@ import time
 from flask import Flask, Response, jsonify, render_template, request
 
 import config
+from adas.acc import ACC
 from adas.aeb import AEB
 from adas.ldw import LDW
 from camera import Camera
 from oled_display import OLEDStatus
 from serial_link import SerialLink
+from v2v import TargetReceiver
 
 app = Flask(__name__)
 
@@ -26,11 +28,20 @@ cam = Camera(config.CAM_DEVICE, config.CAM_WIDTH, config.CAM_HEIGHT,
              config.CAM_FPS, config.JPEG_QUALITY, ldw)
 aeb = AEB(config.AEB_WARN_CM, config.AEB_BRAKE_CM)
 oled = OLEDStatus()  # fails safe — .ok is False if the display isn't wired/detected
+v2v = TargetReceiver(config.V2V_PORT, config.V2V_CMD_PORT, config.V2V_STALE_S)  # fails safe — .ok
+acc = ACC(config)
 
 speed = config.DEFAULT_SPEED
 aeb_events = 0
 lka_events = 0
 lka_enabled = True  # web-togglable; default ON
+
+# ACC needs a live driver UI: if no browser has polled /status within
+# ACC_UI_HEARTBEAT_S, ACC disengages and stops the car. (ACC itself
+# resends F + speed, which would otherwise keep the Arduino watchdog fed
+# with nobody watching.)
+last_ui_poll = 0.0
+acc_lock = threading.Lock()   # guards acc.engage/disengage vs. the loop
 
 # LKA defers to the driver: it only corrects when the driver hasn't
 # touched steering (joystick sideways, or left/right buttons) recently.
@@ -41,15 +52,53 @@ LKA_MAX_CORRECTION = 45  # cap, in steer_norm units (-100..100 scale)
 
 
 # ---------- ADAS decision loop ----------
+def acc_step(s, now, state):
+    """Run one ACC step and apply it to the Arduino. `state` carries the
+    last command sent so we only resend on change or every ACC_CMD_PERIOD_S."""
+    with acc_lock:
+        if not acc.enabled:
+            # still evaluate sensors so the UI shows camera/V2V health
+            acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed)
+            return
+        if cam.detect_mode:
+            acc.disengage("object detection mode")
+            link.stop()
+            return
+        if now - last_ui_poll > config.ACC_UI_HEARTBEAT_S:
+            acc.disengage("driver UI lost")
+            link.stop()
+            return
+        out = acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed)
+
+    if out["action"] == "disengage":
+        link.stop()
+        state["sent"] = None
+        return
+    cmd = ("stop",) if out["action"] == "stop" else ("drive", out["decile"])
+    if cmd != state.get("sent") or now - state.get("t", 0) >= config.ACC_CMD_PERIOD_S:
+        if cmd[0] == "stop":
+            link.stop()
+        else:
+            link.set_speed(out["decile"] / 9 * 255)  # set_speed re-quantises to the same decile
+            link.forward()
+        state["sent"], state["t"] = cmd, now
+
+
 def adas_loop():
     global aeb_events, lka_events
     last_oled_update = 0.0
+    acc_tx = {}
     while True:
         s = link.snapshot()
+        now = time.time()
         moving_fwd = s["l"] > 0 or s["r"] > 0
         if aeb.update(s["dist"], moving_fwd):
             link.ebrake()
             aeb_events += 1
+            with acc_lock:
+                acc.disengage("AEB intervention")
+
+        acc_step(s, now, acc_tx)
 
         # LKA: only correct while driving forward, only on a genuine
         # departure, and only if the driver hasn't steered manually in
@@ -73,6 +122,8 @@ def adas_loop():
         if oled.ok and now - last_oled_update > 0.25:
             last_oled_update = now
             state_txt = {0: "STOP", 1: "FWD", 2: "REV", 3: "MRM!"}.get(s["state"], "?")
+            if acc.enabled:
+                state_txt += " ACC-" + ("V2V" if acc.mode == "v2v" else "CAM")
             oled.update(
                 state=state_txt,
                 dist=s["dist"],
@@ -103,6 +154,8 @@ def video():
 
 @app.route("/status")
 def status():
+    global last_ui_poll
+    last_ui_poll = time.time()  # driver UI heartbeat for ACC
     s = link.snapshot()
     return jsonify(
         dist=s["dist"],
@@ -122,6 +175,9 @@ def status():
         lka_enabled=lka_enabled,
         lka_events=lka_events,
         detect_mode=cam.detect_mode,
+        acc=acc.status(),
+        v2v=v2v.status(),
+        cam_quality={k: round(v, 1) for k, v in (cam.quality or {}).items()},
         fps=round(cam.fps_measured, 1),
         speed=speed,
     )
@@ -130,11 +186,61 @@ def status():
 DRIVE_ACTIONS = {"forward", "reverse", "left", "right", "center", "joystick"}
 
 
+# While ACC is engaged it owns the throttle, like a real car:
+#   - Stop / E-brake / Reverse / joystick pulled back = driver "brake" -> ACC off
+#   - Forward is ignored (ACC is already driving)
+#   - Steering (buttons or joystick sideways) still works, steer-only
+ACC_CANCEL_ACTIONS = {"stop", "ebrake", "reverse", "detect_on"}
+
+
 @app.route("/cmd", methods=["POST"])
 def cmd():
-    global speed, last_manual_steer_ts, lka_enabled
+    global speed, last_manual_steer_ts, lka_enabled, last_ui_poll
     data = request.get_json(force=True, silent=True) or {}
     action = data.get("action", "")
+
+    if action == "acc_on":
+        s = link.snapshot()
+        if cam.detect_mode:
+            return jsonify(ok=False, error="turn off object detection first"), 409
+        if not s["link_ok"]:
+            return jsonify(ok=False, error="no Arduino link"), 409
+        if aeb.level == AEB.BRAKE:
+            return jsonify(ok=False, error="AEB active"), 409
+        if "speed" in data:
+            speed = max(0, min(255, int(data["speed"])))
+        last_ui_poll = time.time()
+        with acc_lock:
+            acc.engage(time.time())
+        return jsonify(ok=True)
+    if action == "acc_off":
+        with acc_lock:
+            acc.disengage("driver switched off")
+        link.stop()
+        return jsonify(ok=True)
+    if action == "v2v_zero":
+        ok, error = v2v.send_cmd("ZERO")
+        return jsonify(ok=ok, error=error)
+
+    if acc.enabled:
+        if action in ACC_CANCEL_ACTIONS or (
+                action == "joystick" and float(data.get("throttle", 0)) < -10):
+            with acc_lock:
+                acc.disengage(f"driver {action}")
+            # fall through: the stop/reverse/joystick itself is executed below
+        elif action == "forward":
+            return jsonify(ok=True, blocked="acc")
+        elif action == "joystick":
+            steer_val = float(data.get("steer", 0))
+            if abs(steer_val) > 3:
+                last_manual_steer_ts = time.time()
+            link.set_steer_angle(steer_val)   # steer only — ACC keeps the throttle
+            return jsonify(ok=True, acc="steer_only")
+        elif action == "speed":
+            # slider = ACC set speed; ACC applies it, don't send it directly
+            if "speed" in data:
+                speed = max(0, min(255, int(data["speed"])))
+            return jsonify(ok=True, acc="set_speed")
 
     # Object detection mode: "when YOLO runs, nothing else runs." Block
     # every drive-affecting action while it's on — stop/ebrake still

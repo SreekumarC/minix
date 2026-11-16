@@ -61,6 +61,11 @@ class Camera:
             self.cap.set(cv2.CAP_PROP_FPS, fps)
 
         self.ok = self.cap.isOpened()
+        self.last_frame_ts = 0.0
+        # Image quality for ACC's camera-health check (adas/acc.py):
+        # bright = mean grey, contrast = grey std-dev, sharp = Laplacian var.
+        self.quality = {}
+        self._frame_n = 0
         self._jpeg = None
         self._lock = threading.Lock()
         self._alive = True
@@ -108,6 +113,11 @@ class Camera:
             if config.CAM_ROTATE_180:
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
 
+            self.last_frame_ts = time.time()
+            self._frame_n += 1
+            if self._frame_n % 3 == 0:   # ~10 Hz is plenty, keep it cheap
+                self.quality = self._measure_quality(frame)
+
             if self._detect_mode and self._detect_model is not None:
                 try:
                     results = self._detect_model(frame, imgsz=640, conf=0.35, verbose=False)
@@ -130,6 +140,15 @@ class Camera:
             last = now
             if dt > 0:
                 self.fps_measured = 0.9 * self.fps_measured + 0.1 / dt
+
+    @staticmethod
+    def _measure_quality(frame):
+        small = cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        mean, std = cv2.meanStdDev(gray)
+        sharp = cv2.Laplacian(gray, cv2.CV_64F).var()
+        return {"bright": float(mean[0][0]), "contrast": float(std[0][0]),
+                "sharp": float(sharp)}
 
     def frame(self):
         with self._lock:

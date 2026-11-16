@@ -26,7 +26,7 @@ class SerialLink:
         self.baud = baud
         self.ser = None
         self._lock = threading.Lock()
-        self._state = {"dist": 999, "l": 0, "r": 0, "state": 1}
+        self._state = {"dist": 999, "dist_ts": None, "l": 0, "r": 0, "state": 1}
         self._alive = True
         self._last_rx = time.time()
 
@@ -88,6 +88,7 @@ class SerialLink:
                 if p[0] == "U" and len(p) == 2:
                     with self._lock:
                         self._state["dist"] = int(p[1])
+                        self._state["dist_ts"] = time.time()  # lets ACC derive range rate
                         self._last_rx = time.time()
                 elif p[0] == "T" and len(p) == 4:
                     with self._lock:

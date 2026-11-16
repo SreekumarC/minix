@@ -10,6 +10,8 @@ minix/
 ├── firmware/
 │   └── minix_drive/
 │       └── minix_drive.ino      # Arduino sketch: drive, steering, ultrasonic, telemetry
+│   └── ACC_Target_Telemetry/
+│       └── ACC_Target_Telemetry.ino  # ESP32 on the ACC target car: speed/accel/position -> V2V
 ├── jetson/
 │   ├── app.py                   # Flask routes: /, /video, /status, /cmd
 │   ├── config.py                # ports, pins-as-seen-from-Jetson, tunables
@@ -17,7 +19,9 @@ minix/
 │   ├── camera.py                # GStreamer/OpenCV capture + MJPEG stream
 │   ├── adas/
 │   │   ├── aeb.py               # Jetson-side AEB decision layer
-│   │   └── ldw.py               # lane departure warning
+│   │   ├── ldw.py               # lane departure warning
+│   │   └── acc.py               # adaptive cruise control (camera/ultrasonic, V2V fallback)
+│   ├── v2v.py                   # UDP receiver for the ACC target's telemetry
 │   ├── templates/
 │   │   └── index.html           # browser UI: video + drive buttons + status
 │   ├── static/                  # css/js for the UI, if any
@@ -26,8 +30,10 @@ minix/
 ├── scripts/
 │   └── install.sh               # venv + deps + systemd install, one shot
 └── docs/
-    └── serial_protocol.md       # the Arduino<->Jetson contract — read this
-                                  # before changing either side
+    ├── serial_protocol.md       # the Arduino<->Jetson contract — read this
+    │                             # before changing either side
+    ├── acc_v2v.md               # ACC modes, tuning, V2V packet format, bring-up
+    └── wiring/                  # ACC target measurement-unit wiring diagram
 ```
 
 ## Why this split
