@@ -1,0 +1,119 @@
+# ACC with camera / ultrasonic and V2V fallback
+
+MiniX (ego) follows a target vehicle (mecanum RC car, driven by its own
+stock remote). ACC is switched on/off from the web UI.
+
+```
+target RC car ──ESP32 (Hall ×2 + MPU-6050)──UDP 5005, 50 Hz──▶ Jetson v2v.py ─┐
+                                                                               ├─▶ adas/acc.py ─▶ serial F / S / 0-9 ─▶ Arduino
+MiniX HC-SR04 ──Arduino "U <cm>"──▶ serial_link.py ────────────────────────────┤
+MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ────────────┘
+```
+
+## Files
+
+| File | Role |
+|------|------|
+| `jetson/adas/acc.py` | ACC decision layer: mode selection, gap control, rate limits. Pure logic. |
+| `jetson/v2v.py` | UDP receiver for target telemetry. Fail-safe: `.ok` False if the port can't be bound. Also a CLI (`python3 v2v.py`). |
+| `jetson/app.py` | `acc_step()` in `adas_loop`, `acc_on`/`acc_off`/`v2v_zero` actions in `/cmd`, `acc`/`v2v`/`cam_quality` in `/status`. |
+| `jetson/camera.py` | Adds `last_frame_ts` and `quality` (brightness, contrast, sharpness) per frame. |
+| `jetson/serial_link.py` | Adds `dist_ts` (time of each `U` line) so ACC can compute range rate. No protocol change. |
+| `jetson/config.py` | All `ACC_*` and `V2V_*` tunables. |
+| `firmware/ACC_Target_Telemetry/ACC_Target_Telemetry.ino` | ESP32 sketch for the target vehicle. |
+| `docs/wiring/ACC_Target_Measurement_Wiring_RevB.*` | Target measurement-unit wiring diagram. |
+
+## Modes
+
+| Mode | When | Gap from | Lead speed from |
+|------|------|----------|-----------------|
+| **CAMERA** (default) | camera healthy **and** road readable | ultrasonic | ultrasonic range rate + integrator |
+| **V2V** | camera bad for `ACC_TO_V2V_S` (0.5 s) and target packets fresh | ultrasonic (if echo) | target telemetry (speed + accel feed-forward) |
+| **FAULT** | camera bad and no fresh V2V, or Arduino link down | — | ACC disengages, car stops |
+
+Back from V2V to CAMERA after the camera has been healthy for
+`ACC_TO_CAMERA_S` (2 s). If V2V drops while the camera is usable, ACC
+goes straight back to CAMERA.
+
+**Camera healthy** = camera open, frame < 0.5 s old, fps ≥ `ACC_CAM_MIN_FPS`,
+mean brightness within `ACC_CAM_MIN/MAX_BRIGHT`, contrast ≥
+`ACC_CAM_MIN_CONTRAST`, sharpness (Laplacian variance) ≥
+`ACC_CAM_MIN_SHARPNESS`, and (if `ACC_CAM_REQUIRE_LANES`) LDW found lanes
+in ≥ `ACC_CAM_LANE_RATIO` of the last `ACC_CAM_LANE_WINDOW_S` seconds.
+Live values are in `/status` → `cam_quality`, so thresholds can be tuned
+at the venue. **If the test area has no lane markings, set
+`ACC_CAM_REQUIRE_LANES = False`**, otherwise ACC will always run in V2V.
+
+Object detection (YOLO) is still a separate mode that blocks driving,
+so it is not used for lead-vehicle confirmation here; turning it on
+disengages ACC.
+
+## Control
+
+- Desired gap `ACC_GAP_CM` (80 cm). PWM request =
+  feed-forward + `ACC_KP`·gap error + `ACC_KD`·range rate.
+  Feed-forward is an integrator in CAMERA mode, and
+  `v_lead·ACC_PWM_PER_MPS + ACC_KA·a_lead` in V2V mode.
+- Stops if gap < `ACC_STOP_GAP_CM` (60 cm) and not opening, or (V2V) the
+  lead has stopped. Ramp limits give smooth starts and firmer stops.
+- No lead within `ACC_DETECT_CM` → cruise at the speed slider value. In
+  V2V mode with the lead beyond ultrasonic range, speed is capped at the
+  lead's speed + `ACC_V2V_BLIND_MARGIN_MPS`.
+- Output is quantised to the Arduino's `0`-`9` speed deciles (~28 PWM a
+  step) and resent with `F` every `ACC_CMD_PERIOD_S`. Below
+  `ACC_PWM_MIN_MOVE` it sends `S`. The decile step is the main limit on
+  smoothness; a fine-grained speed command in the firmware would be the
+  next improvement (needs a protocol change + reflash).
+
+**Calibrate `ACC_PWM_PER_MPS`** before relying on V2V mode: drive at a
+fixed slider value, time it over a known distance, PWM ÷ m/s.
+
+## Driver interaction (web UI)
+
+- **ACC: On** engages; the speed slider is the set speed.
+- Stop, E-brake, Reverse, or pulling the joystick back → ACC off.
+- Forward is ignored while ACC drives. Steering (buttons or joystick
+  sideways) stays manual and is sent steer-only (`A`), so it never
+  touches the throttle. LKA works as before.
+- AEB still runs independently; an AEB brake also switches ACC off.
+- If no browser polls `/status` for `ACC_UI_HEARTBEAT_S` (1 s), ACC
+  disengages and stops — ACC resends `F` itself, so without this the
+  Arduino watchdog would stay fed with nobody watching.
+- **Zero target** resets the target's distance/x/y/heading (UDP `ZERO`).
+
+## V2V packet (target → Jetson, UDP 5005, 50 Hz, 56 bytes, little-endian)
+
+Python: `struct.unpack('<HBBII11f', data)`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| magic | u16 | `0xAC01` |
+| version | u8 | 1 |
+| flags | u8 | bit0 IMU ok, bit1 moving, bit2 OLED ok |
+| seq | u32 | resets on target reboot |
+| t_ms | u32 | target `millis()` |
+| v_mps | f32 | fused speed (≥ 0; single Hall has no direction) |
+| ax_mps2, ay_mps2 | f32 | filtered, bias removed |
+| yaw_rate_dps, heading_deg | f32 | CCW + |
+| dist_m, x_m, y_m | f32 | since last `ZERO` |
+| vL_mps, vR_mps | f32 | raw wheel speeds |
+| vbat_v | f32 | target battery |
+
+Commands (Jetson → target, UDP 5006, text): `ZERO`, `CAL` (only when the
+target is still). If you change the struct, change it in the `.ino`, in
+`jetson/v2v.py` (`FMT`/`FIELDS`) and here together.
+
+## Bring-up
+
+1. Flash `firmware/ACC_Target_Telemetry` to the target ESP32 (Arduino IDE,
+   board *ESP32 Dev Module*, library *Adafruit SSD1306*). Set `WIFI_SSID` /
+   `WIFI_PASS` to the network the Jetson is on (e.g. the phone hotspot),
+   `WHEEL_DIAMETER_M` and `MAGNETS_PER_REV`. Keep the target still for ~1 s
+   at power-on (IMU calibration).
+2. On the Jetson, with the minix service stopped: `cd jetson && python3 v2v.py`
+   — packets should show `OK`. Some hotspots block broadcast; if so set
+   `EGO_IP` in the sketch to the Jetson's IP.
+3. Start the app, open the UI: the **Target** telltale shows live speed;
+   the **ACC** telltale shows `cam ok` or why the camera is rejected.
+4. Wheels off the ground first, then a slow floor test with the target
+   pushed by hand.

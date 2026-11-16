@@ -16,6 +16,7 @@ decision in the repo.
 ```
 minix/
 ├── firmware/minix_drive/minix_drive.ino   # Arduino sketch (drive/steer/ultrasonic/telemetry)
+├── firmware/ACC_Target_Telemetry/         # ESP32 sketch for the ACC target car (separate vehicle)
 ├── jetson/
 │   ├── app.py                             # Flask routes + the ADAS decision loop thread
 │   ├── config.py                          # ports, pins-as-seen-from-Jetson, tunables
@@ -24,13 +25,16 @@ minix/
 │   ├── oled_display.py                    # optional SSD1306 status display on the Jetson's I2C
 │   ├── adas/
 │   │   ├── aeb.py                         # autonomous emergency braking decision layer
-│   │   └── ldw.py                         # lane departure warning (classical CV, no NN)
+│   │   ├── ldw.py                         # lane departure warning (classical CV, no NN)
+│   │   └── acc.py                         # adaptive cruise control: camera/ultrasonic, V2V fallback
+│   ├── v2v.py                             # UDP receiver for ACC-target telemetry (fail-safe .ok)
 │   ├── templates/index.html               # the live UI (Flask looks here, not jetson/index.html)
 │   ├── static/{app.js,style.css}
 │   └── requirements.txt
 ├── scripts/install.sh                     # venv + deps + systemd install, one shot
 ├── systemd/minix.service                  # (see "stale/duplicate files" below)
-└── docs/serial_protocol.md                # the Arduino<->Jetson contract — read before touching either side
+├── docs/serial_protocol.md                # the Arduino<->Jetson contract — read before touching either side
+└── docs/acc_v2v.md                        # ACC modes/tuning + the target<->Jetson V2V packet contract
 ```
 
 ## Stale/duplicate files — don't edit the wrong one
@@ -107,6 +111,15 @@ the Flask app ever blocks on the port.
   so a missing/incompatible detection venv only breaks detection mode,
   never normal driving. While detect mode is on, `app.py`'s `/cmd`
   route blocks every action in `DRIVE_ACTIONS` except stop/ebrake.
+- **ACC** (`adas/acc.py`) is pure logic; `app.py`'s `acc_step()` applies
+  it. While engaged it owns the throttle (resends `F` + speed decile);
+  stop/ebrake/reverse/joystick-back cancel it, steering stays manual via
+  `A`. It disengages if no browser has polled `/status` for
+  `ACC_UI_HEARTBEAT_S`, because its own resends would otherwise keep the
+  Arduino watchdog fed. Camera-bad -> V2V mode (target telemetry via
+  `v2v.py`). The V2V packet layout is a contract between
+  `firmware/ACC_Target_Telemetry` and `jetson/v2v.py` — change both and
+  `docs/acc_v2v.md` together.
 - **Fail-safe-by-construction** is the house style: `SerialLink`,
   `Camera`, and `OLEDStatus` all swallow their own connection/hardware
   errors internally and expose an `.ok`/`link_ok` flag instead of

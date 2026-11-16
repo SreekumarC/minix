@@ -42,6 +42,16 @@
       <span class="name">LDW</span>
       <span id="ldw-val" class="val">--</span>
     </div>
+    <div id="tt-acc" class="tt">
+      <span class="glyph">&lt;=&gt;&nbsp;<span id="acc-mode">--</span></span>
+      <span class="name">ACC</span>
+      <span id="acc-val" class="val">off</span>
+    </div>
+    <div id="tt-v2v" class="tt">
+      <span class="glyph">))&nbsp;V2V&nbsp;((</span>
+      <span class="name">Target</span>
+      <span id="v2v-val" class="val">no data</span>
+    </div>
     <div class="tt readout">
       <span class="name">Range</span>
       <span id="dist" class="big">---</span><span class="unit">cm</span>
@@ -80,6 +90,14 @@
     <div class="row">
       <button id="lka-toggle" class="btn wide">LKA: On</button>
     </div>
+
+    <div class="row">
+      <button id="acc-toggle" class="btn wide">ACC: Off</button>
+      <button id="v2v-zero" class="btn">Zero target</button>
+    </div>
+    <div class="acc-note">ACC uses the speed slider as set speed. Stop, E-brake,
+      Reverse or pulling the joystick back cancels it; steering stays manual.
+      <span id="acc-reason"></span></div>
 
     <div class="row">
       <button id="detect-toggle" class="btn wide">Object Detection: Off</button>
