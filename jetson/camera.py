@@ -64,7 +64,8 @@ class Camera:
         self.last_frame_ts = 0.0
         # Image quality for ACC's camera-health check (adas/acc.py):
         # bright = mean grey, contrast = grey std-dev, sharp = Laplacian var.
-        self.quality = {}
+        # (Not self.quality — that is the JPEG quality used by imencode.)
+        self.image_quality = {}
         self._frame_n = 0
         self._jpeg = None
         self._lock = threading.Lock()
@@ -116,7 +117,7 @@ class Camera:
             self.last_frame_ts = time.time()
             self._frame_n += 1
             if self._frame_n % 3 == 0:   # ~10 Hz is plenty, keep it cheap
-                self.quality = self._measure_quality(frame)
+                self.image_quality = self._measure_quality(frame)
 
             if self._detect_mode and self._detect_model is not None:
                 try:

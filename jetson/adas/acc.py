@@ -78,7 +78,7 @@ class ACC:
     # ---------- camera health ----------
     def camera_health(self, now, cam, ldw):
         """Return (ok, reason). cam exposes .ok, .fps_measured,
-        .last_frame_ts and .quality = {bright, contrast, sharp}."""
+.last_frame_ts and .image_quality = {bright, contrast, sharp}."""
         c = self.c
         if ldw is not None:
             self._lanes.append((now, bool(ldw.lanes_seen)))
@@ -91,7 +91,7 @@ class ACC:
             return False, "no frames"
         if cam.fps_measured < c.ACC_CAM_MIN_FPS:
             return False, f"low fps ({cam.fps_measured:.0f})"
-        q = getattr(cam, "quality", None) or {}
+        q = getattr(cam, "image_quality", None) or {}
         if q:
             if q["bright"] < c.ACC_CAM_MIN_BRIGHT:
                 return False, "too dark"

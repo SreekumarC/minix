@@ -17,7 +17,7 @@ MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ───
 | `jetson/adas/acc.py` | ACC decision layer: mode selection, gap control, rate limits. Pure logic. |
 | `jetson/v2v.py` | UDP receiver for target telemetry. Fail-safe: `.ok` False if the port can't be bound. Also a CLI (`python3 v2v.py`). |
 | `jetson/app.py` | `acc_step()` in `adas_loop`, `acc_on`/`acc_off`/`v2v_zero` actions in `/cmd`, `acc`/`v2v`/`cam_quality` in `/status`. |
-| `jetson/camera.py` | Adds `last_frame_ts` and `quality` (brightness, contrast, sharpness) per frame. |
+| `jetson/camera.py` | Adds `last_frame_ts` and `image_quality` (brightness, contrast, sharpness) per frame. |
 | `jetson/serial_link.py` | Adds `dist_ts` (time of each `U` line) so ACC can compute range rate. No protocol change. |
 | `jetson/config.py` | All `ACC_*` and `V2V_*` tunables. |
 | `firmware/ACC_Target_Telemetry/ACC_Target_Telemetry.ino` | ESP32 sketch for the target vehicle. |

@@ -177,7 +177,7 @@ def status():
         detect_mode=cam.detect_mode,
         acc=acc.status(),
         v2v=v2v.status(),
-        cam_quality={k: round(v, 1) for k, v in (cam.quality or {}).items()},
+        cam_quality={k: round(v, 1) for k, v in (cam.image_quality or {}).items()},
         fps=round(cam.fps_measured, 1),
         speed=speed,
     )
