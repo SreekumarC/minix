@@ -22,7 +22,7 @@ MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ───
 | `jetson/serial_link.py` | Adds `dist_ts` (time of each `U` line) so ACC can compute range rate. No protocol change. |
 | `jetson/config.py` | All `ACC_*` and `V2V_*` tunables. |
 | `firmware/ACC_Target_Telemetry/ACC_Target_Telemetry.ino` | ESP32 sketch for the target vehicle. |
-| `docs/wiring/ACC_Target_Measurement_Wiring_RevB.*` | Target measurement-unit wiring diagram. |
+| `docs/wiring/ACC_Target_Wiring_RevC.*` | Target wiring as built (ESP32 DevKit 30-pin, LM2596), pins in board order. Rev B = earlier logical version. |
 
 ## Modes
 
