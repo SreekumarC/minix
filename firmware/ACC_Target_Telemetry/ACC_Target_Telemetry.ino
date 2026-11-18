@@ -1,5 +1,5 @@
 /*
-  ACC_Target_Telemetry.ino  —  Rev B (matches wiring diagram Rev B, 14-Nov-2026)
+  ACC_Target_Telemetry.ino  —  Rev C (wiring diagram Rev C, 18-Nov-2026)
   -----------------------------------------------------------------------------
   Measurement & telemetry unit for the ACC TARGET vehicle (mecanum RC car).
   The car is driven by its stock remote. This ESP32 only MEASURES and SENDS:
@@ -75,7 +75,7 @@ const int PIN_VBAT   = 36;   // ADC1_CH0 (works while Wi-Fi is on)
 const int PIN_MPUINT = 39;   // wired, not used by this sketch (polled at 100 Hz)
 
 // MPU-6050 registers
-const uint8_t MPU_ADDR       = 0x68;
+uint8_t       MPU_ADDR       = 0x68;   // 0x69 if AD0 is high; probed at boot
 const uint8_t REG_PWR_MGMT_1 = 0x6B;
 const uint8_t REG_SMPLRT_DIV = 0x19;
 const uint8_t REG_CONFIG     = 0x1A;
@@ -157,9 +157,27 @@ bool mpuReadRaw(int16_t &ax, int16_t &ay, int16_t &az, int16_t &gz) {
   return true;
 }
 
+bool i2cPresent(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+}
+
+// List every I2C device on the bus — the first thing to look at when the
+// OLED (0x3C) or MPU-6050 (0x68/0x69) isn't found.
+void i2cScan() {
+  Serial.print("[I2C] devices found:");
+  int n = 0;
+  for (uint8_t a = 1; a < 127; a++) {
+    if (i2cPresent(a)) { Serial.printf(" 0x%02X", a); n++; }
+  }
+  Serial.println(n ? "" : " none (check SDA=D21, SCL=D22, 3V3, GND)");
+}
+
 bool mpuInit() {
-  Wire.beginTransmission(MPU_ADDR);
-  if (Wire.endTransmission() != 0) return false;   // not found on the bus
+  if (i2cPresent(0x68))      MPU_ADDR = 0x68;
+  else if (i2cPresent(0x69)) MPU_ADDR = 0x69;
+  else return false;                               // not found on the bus
+  Serial.printf("[IMU] MPU found at 0x%02X\n", MPU_ADDR);
   mpuWrite(REG_PWR_MGMT_1, 0x01);  // wake, PLL with X-gyro clock
   delay(50);
   mpuWrite(REG_SMPLRT_DIV, 0x09);  // 1 kHz / (1+9) = 100 Hz
@@ -270,19 +288,41 @@ void pollCommands() {
 }
 
 // ------------------------------- Wi-Fi --------------------------------------
+const char *wlName(wl_status_t st) {
+  switch (st) {
+    case WL_IDLE_STATUS:     return "idle / connecting";
+    case WL_NO_SSID_AVAIL:   return "SSID not found";
+    case WL_CONNECT_FAILED:  return "connect failed (wrong password?)";
+    case WL_CONNECTION_LOST: return "connection lost";
+    case WL_DISCONNECTED:    return "disconnected";
+    default:                 return "other";
+  }
+}
+
+// The Wi-Fi driver reconnects by itself (setAutoReconnect). Only kick it if it
+// has clearly given up, and never more often than every 15 s — restarting a
+// connection that is still in progress is what caused
+// "sta is connecting, cannot set config".
 void wifiService() {
-  static uint32_t lastTry = 0;
+  static uint32_t lastKick = 0, lastPrint = 0;
   static bool wasConnected = false;
-  bool connected = (WiFi.status() == WL_CONNECTED);
+  wl_status_t st = WiFi.status();
+  bool connected = (st == WL_CONNECTED);
   if (connected && !wasConnected) {
     Serial.printf("[WiFi] connected, IP %s, RSSI %d dBm\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
     udpStarted = udp.begin(CMD_PORT);
   }
-  if (!connected && millis() - lastTry > 3000) {
-    lastTry = millis();
-    WiFi.disconnect();
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  if (!connected && wasConnected) Serial.println("[WiFi] connection lost");
+  if (!connected && millis() - lastPrint > 5000) {
+    lastPrint = millis();
+    Serial.printf("[WiFi] not connected: %s (SSID \"%s\")\n", wlName(st), WIFI_SSID);
+  }
+  if (!connected && millis() - lastKick > 15000 &&
+      (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED ||
+       st == WL_CONNECTION_LOST || st == WL_DISCONNECTED)) {
+    lastKick = millis();
+    WiFi.reconnect();
   }
   wasConnected = connected;
 }
@@ -317,7 +357,7 @@ void updateOled() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== ACC Target Telemetry (Rev B) ===");
+  Serial.println("\n=== ACC Target Telemetry (Rev C) ===");
 
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(400000);
@@ -335,12 +375,14 @@ void setup() {
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_VBAT, ADC_11db);
 
+  i2cScan();
   imuOk = mpuInit();
   if (imuOk) calibrateImu();
   else { Serial.println("[IMU] MPU-6050 not found — speed from wheels only"); oledMsg("IMU NOT FOUND", "wheels only"); delay(1000); }
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);          // lower, steadier latency
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   Serial.printf("Distance per pulse: %.4f m\n", DIST_PER_PULSE_M);
