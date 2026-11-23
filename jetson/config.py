@@ -45,6 +45,7 @@ ACC_V2V_BLIND_MARGIN_MPS = 0.15  # V2V mode, lead beyond ultrasonic: max lead sp
 ACC_CMD_PERIOD_S = 0.1     # resend speed+F (also feeds the Arduino MRM watchdog)
 ACC_UI_HEARTBEAT_S = 1.0   # ACC disengages + stops if no browser polls /status this long
 ACC_KV_PWM_PER_MPS = 60.0  # V2V: PWM per m/s of (lead speed - IMU ego speed)
+ACC_KV_MAX_PWM = 40.0      # ... correction clamped to +- this
 ACC_CURVE_YAW_DPS = 60.0   # IMU yaw rate above this = in a bend
 ACC_CURVE_SPEED_FRAC = 0.6 # ... cap ACC request to this share of set speed
 
@@ -77,4 +78,4 @@ IMU_ENABLED = True
 IMU_I2C_BUS = 1            # pins 27 (SDA) / 28 (SCL)
 IMU_I2C_ADDR = 0x6B
 IMU_FWD_DEG = -83.0        # vehicle forward, deg from board +X toward +Y (tilt test 2026-11-23)
-IMU_SPEED_MAX_S = 8.0      # integrated ego speed trusted this long after a stop
+IMU_SPEED_MAX_S = 4.0      # integrated ego speed trusted this long after a stop (drifts ~0.1 m/s/s)

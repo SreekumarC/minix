@@ -42,7 +42,7 @@ GYR_LSB_DPS = 8.75e-3      # +-250 dps
 
 class IMU:
     def __init__(self, bus=1, address=0x6B, fwd_deg=-83.0, rate_hz=100,
-                 speed_max_s=8.0):
+                 speed_max_s=4.0):
         self.ok = False
         self.error = ""
         self._addr = address

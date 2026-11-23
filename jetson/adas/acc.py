@@ -256,7 +256,8 @@ class ACC:
             if (self.mode == V2V and lead_pkt and imu["v_valid"]
                     and imu["v_mps"] > 0.05 and lead_pkt["v_mps"] > 0.05
                     and target > 0.0):
-                target += c.ACC_KV_PWM_PER_MPS * (lead_pkt["v_mps"] - imu["v_mps"])
+                corr = c.ACC_KV_PWM_PER_MPS * (lead_pkt["v_mps"] - imu["v_mps"])
+                target += max(-c.ACC_KV_MAX_PWM, min(c.ACC_KV_MAX_PWM, corr))
             if abs(imu["yaw_dps"]) > c.ACC_CURVE_YAW_DPS:
                 self.curve = True
                 target = min(target, c.ACC_CURVE_SPEED_FRAC * float(set_pwm))

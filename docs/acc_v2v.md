@@ -101,7 +101,9 @@ If the board is ever remounted, repeat the tilt test and update that value.
   `IMU_SPEED_MAX_S` after a stop (no wheel encoder, so it drifts).
 - ACC uses it for a curve speed cap (`ACC_CURVE_YAW_DPS`,
   `ACC_CURVE_SPEED_FRAC`) and, in V2V mode, speed matching
-  (`ACC_KV_PWM_PER_MPS` x (lead speed - ego speed)).
+  (`ACC_KV_PWM_PER_MPS` x (lead speed - ego speed), clamped to
+  `ACC_KV_MAX_PWM`). Bench test showed ~0.1 m/s per second of drift from a
+  small tilt, hence the 4 s trust window.
 - Missing/unwired IMU: `.ok` False, UI shows "IMU not found", ACC behaves
   exactly as before.
 
