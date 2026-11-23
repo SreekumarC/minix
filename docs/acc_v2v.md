@@ -32,6 +32,12 @@ MiniX Brio 100 ──camera.py (quality metrics) + ldw.py (lanes seen) ───
 | **V2V** | camera bad for `ACC_TO_V2V_S` (0.5 s) and target packets fresh | ultrasonic (if echo) | target telemetry (speed + accel feed-forward) |
 | **FAULT** | camera bad and no fresh V2V, or Arduino link down | — | ACC disengages, car stops |
 
+If the picture itself is fine but no lane/target is in view and there is no
+V2V, ACC stays in CAMERA on the ultrasonic (cruise until it gets an echo)
+rather than faulting. FAULT is only for a bad picture (dark, blurred, no
+frames) with no V2V. V2V dropouts up to `ACC_V2V_HOLD_S` (1 s) are bridged
+with the last packet.
+
 Back from V2V to CAMERA after the camera has been healthy for
 `ACC_TO_CAMERA_S` (2 s). If V2V drops while the camera is usable, ACC
 goes straight back to CAMERA.

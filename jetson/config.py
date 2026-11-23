@@ -66,6 +66,7 @@ ACC_TO_CAMERA_S = 2.0      # camera good this long -> back to camera
 V2V_PORT = 5005            # target -> Jetson telemetry (UDP)
 V2V_CMD_PORT = 5006        # Jetson -> target commands (ZERO / CAL)
 V2V_STALE_S = 0.3          # no packet this long = V2V unavailable
+ACC_V2V_HOLD_S = 1.0       # ACC rides through V2V dropouts up to this long on the last packet
 
 # --- server ---
 HOST = "0.0.0.0"

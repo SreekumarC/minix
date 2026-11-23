@@ -67,6 +67,8 @@ class ACC:
         self.gap_src = None        # 'ultrasonic' | 'camera' | None
         self.imu = None            # last IMU snapshot used (status only)
         self.curve = False
+        self.cam_soft = False
+        self._v2v_ok_t = None
         self._held = False         # stopped behind the lead; wait for the gap to reopen
         self.target_seen = False
         self._prev_gap = None
@@ -98,6 +100,7 @@ class ACC:
         """Return (ok, reason). cam exposes .ok, .fps_measured,
 .last_frame_ts and .image_quality = {bright, contrast, sharp}."""
         c = self.c
+        self.cam_soft = False      # True = picture fine, only the scene isn't recognised
         if ldw is not None or target is not None:
             scene = bool(ldw is not None and ldw.lanes_seen) or \
                     bool(target is not None and target.seen)
@@ -128,6 +131,7 @@ class ACC:
             if self._lanes and now - self._lanes[0][0] >= 0.8 * c.ACC_CAM_LANE_WINDOW_S:
                 ratio = sum(1 for _, s in self._lanes if s) / len(self._lanes)
                 if ratio < c.ACC_CAM_LANE_RATIO:
+                    self.cam_soft = True
                     return False, f"can't read road/vehicle ({ratio:.0%})"
         return True, "ok"
 
@@ -182,15 +186,27 @@ class ACC:
             self.mode = FAULT
             return {"action": "disengage", "pwm": 0, "decile": 0, "reason": self.reason}
 
+        # V2V availability, bridging short Wi-Fi dropouts with the last packet
+        if v2v_fresh and lead_pkt:
+            self._v2v_ok_t = now
+        v2v_ok = bool(lead_pkt) and self._v2v_ok_t is not None and \
+            now - self._v2v_ok_t < c.ACC_V2V_HOLD_S
+
         if not self._using_v2v:
             if self.cam_ok:
                 self._bad_since = None
             else:
                 self._bad_since = self._bad_since or now
                 if now - self._bad_since >= c.ACC_TO_V2V_S:
-                    self._using_v2v = True
-                    self._good_since = None
-                    self.reason = f"camera: {self.cam_reason} -> V2V"
+                    if v2v_ok:
+                        self._using_v2v = True
+                        self._good_since = None
+                        self.reason = f"camera: {self.cam_reason} -> V2V"
+                    elif self.cam_soft:
+                        # picture is fine, there's just no lane/target in view and
+                        # no V2V: keep going on camera + ultrasonic (cruise until
+                        # the ultrasonic finds a lead) instead of shutting ACC off
+                        self.reason = "no target in view, no V2V -> ultrasonic"
         else:
             if self.cam_ok:
                 self._good_since = self._good_since or now
@@ -201,14 +217,21 @@ class ACC:
             else:
                 self._good_since = None
 
-        if self._using_v2v and not (v2v_fresh and lead_pkt):
-            if self.cam_ok:      # V2V gone but camera usable again: take it now
+        if self._using_v2v and not v2v_ok:
+            if self.cam_ok or self.cam_soft:   # V2V gone, picture usable: camera + ultrasonic
                 self._using_v2v = False
-                self.reason = "V2V lost, camera ok -> camera"
+                self._bad_since = None
+                self.reason = "V2V lost -> camera + ultrasonic"
             else:
                 self.disengage(f"camera: {self.cam_reason}; no V2V data")
                 self.mode = FAULT
                 return {"action": "disengage", "pwm": 0, "decile": 0, "reason": self.reason}
+
+        if (not self._using_v2v and not self.cam_ok and not self.cam_soft
+                and self._bad_since and now - self._bad_since >= c.ACC_TO_V2V_S):
+            self.disengage(f"camera: {self.cam_reason}; no V2V data")
+            self.mode = FAULT
+            return {"action": "disengage", "pwm": 0, "decile": 0, "reason": self.reason}
 
         self.mode = V2V if self._using_v2v else CAMERA
 
