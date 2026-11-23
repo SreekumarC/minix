@@ -38,8 +38,9 @@ const WifiNet   WIFI_NETS[] = {
 };
 const uint32_t  WIFI_TRY_MS = 12000;   // give each network this long to connect
 
-// 255.255.255.255 = broadcast (no IP setup needed). For lower loss on busy
-// networks, put the Jetson's IP here instead, e.g. IPAddress(192,168,43,50).
+// 255.255.255.255 = broadcast (no IP setup needed). Broadcast on Wi-Fi is sent
+// at the lowest rate with no retries, so it loses a few % of packets; for a
+// steadier link put the Jetson's IP here instead, e.g. IPAddress(10,156,22,46).
 IPAddress       EGO_IP(255, 255, 255, 255);
 const uint16_t  EGO_PORT = 5005;           // Jetson listens here
 const uint16_t  CMD_PORT = 5006;           // ESP32 listens here for ZERO / CAL
@@ -479,8 +480,9 @@ void loop() {
     } else {
       // no wheel data: parked = quiet (no motor vibration), level accel, not turning
       static uint32_t quietSinceMs = 0;
-      bool quiet = imuOk && vib < STILL_VIB_MPS2 && fabsf(axF) < STILL_ACC_MPS2
-                   && fabsf(gzDps) < 2.0f;
+      // (no |ax| test here: a small accel offset after a tilt/temperature
+      //  change would otherwise keep the car "moving" forever while parked)
+      bool quiet = imuOk && vib < STILL_VIB_MPS2 && fabsf(gzDps) < 2.0f;
       if (!quiet) quietSinceMs = 0;
       else if (!quietSinceMs) quietSinceMs = millis() | 1;
       still = !imuOk || (quietSinceMs && millis() - quietSinceMs >= STILL_HOLD_MS);
@@ -491,7 +493,11 @@ void loop() {
       vFused = 0;
       if (imuOk) {   // slowly track gyro drift while parked
         int16_t ax, ay, az, gz;
-        if (mpuReadRaw(ax, ay, az, gz)) biasGz += 0.002f * (gz - biasGz);
+        if (mpuReadRaw(ax, ay, az, gz)) {
+          biasGz += 0.002f * (gz - biasGz);
+          biasAx += 0.002f * (ax - biasAx);   // re-level: absorbs tilt / temp drift
+          biasAy += 0.002f * (ay - biasAy);
+        }
       }
       yawRateDps = 0;
     } else {
