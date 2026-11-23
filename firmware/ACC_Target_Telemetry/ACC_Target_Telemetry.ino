@@ -26,9 +26,16 @@
 #include <math.h>
 
 // ============================ USER CONFIGURATION ============================
-// Wi-Fi: join the same network as the MiniX Jetson (e.g. the phone hotspot).
-const char*     WIFI_SSID = "YOUR_SSID";
-const char*     WIFI_PASS = "YOUR_PASSWORD";
+// Wi-Fi: join the same network as the MiniX Jetson (e.g. a phone hotspot).
+// List one or more networks; the first that answers is used. If it is lost
+// for WIFI_TRY_MS, the next one in the list is tried, and so on round-robin.
+// The Jetson must be on the same hotspot the target ends up on.
+struct WifiNet { const char *ssid; const char *pass; };
+const WifiNet   WIFI_NETS[] = {
+  { "YOUR_SSID_1", "YOUR_PASSWORD_1" },
+  { "YOUR_SSID_2", "YOUR_PASSWORD_2" },
+};
+const uint32_t  WIFI_TRY_MS = 12000;   // give each network this long to connect
 
 // 255.255.255.255 = broadcast (no IP setup needed). For lower loss on busy
 // networks, put the Jetson's IP here instead, e.g. IPAddress(192,168,43,50).
@@ -299,30 +306,43 @@ const char *wlName(wl_status_t st) {
   }
 }
 
-// The Wi-Fi driver reconnects by itself (setAutoReconnect). Only kick it if it
-// has clearly given up, and never more often than every 15 s — restarting a
-// connection that is still in progress is what caused
-// "sta is connecting, cannot set config".
+const int WIFI_N = sizeof(WIFI_NETS) / sizeof(WIFI_NETS[0]);
+int      wifiIdx = 0;
+uint32_t wifiTryStart = 0;
+
+void wifiBegin(int idx) {
+  wifiIdx = idx % WIFI_N;
+  Serial.printf("[WiFi] trying \"%s\" (%d/%d)\n", WIFI_NETS[wifiIdx].ssid, wifiIdx + 1, WIFI_N);
+  WiFi.disconnect(false, false);   // stop any attempt in progress first —
+  delay(100);                      // avoids "sta is connecting, cannot set config"
+  WiFi.begin(WIFI_NETS[wifiIdx].ssid, WIFI_NETS[wifiIdx].pass);
+  wifiTryStart = millis();
+}
+
+// The driver retries the current network by itself (setAutoReconnect). If it
+// hasn't connected within WIFI_TRY_MS, move on to the next network in the list.
 void wifiService() {
-  static uint32_t lastKick = 0, lastPrint = 0;
+  static uint32_t lastPrint = 0;
   static bool wasConnected = false;
   wl_status_t st = WiFi.status();
   bool connected = (st == WL_CONNECTED);
   if (connected && !wasConnected) {
-    Serial.printf("[WiFi] connected, IP %s, RSSI %d dBm\n",
+    Serial.printf("[WiFi] connected to \"%s\", IP %s, RSSI %d dBm\n", WIFI_NETS[wifiIdx].ssid,
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    udp.stop();
     udpStarted = udp.begin(CMD_PORT);
   }
-  if (!connected && wasConnected) Serial.println("[WiFi] connection lost");
+  if (!connected && wasConnected) {
+    Serial.println("[WiFi] connection lost");
+    wifiTryStart = millis();         // give the same network a fresh window first
+  }
   if (!connected && millis() - lastPrint > 5000) {
     lastPrint = millis();
-    Serial.printf("[WiFi] not connected: %s (SSID \"%s\")\n", wlName(st), WIFI_SSID);
+    Serial.printf("[WiFi] not connected: %s (SSID \"%s\")\n", wlName(st), WIFI_NETS[wifiIdx].ssid);
   }
-  if (!connected && millis() - lastKick > 15000 &&
-      (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED ||
-       st == WL_CONNECTION_LOST || st == WL_DISCONNECTED)) {
-    lastKick = millis();
-    WiFi.reconnect();
+  if (!connected && millis() - wifiTryStart > WIFI_TRY_MS) {
+    udpStarted = false;
+    wifiBegin(wifiIdx + 1);          // round-robin (with one network: plain retry)
   }
   wasConnected = connected;
 }
@@ -335,7 +355,8 @@ void updateOled() {
   oled.setTextSize(1);
   oled.setCursor(0, 0);
   oled.print("ACC TGT ");
-  oled.print(WiFi.status() == WL_CONNECTED ? "WiFi OK" : "WiFi --");
+  if (WiFi.status() == WL_CONNECTED) { oled.print("WiFi "); oled.print(wifiIdx + 1); }
+  else oled.print("WiFi --");
   if (!imuOk) { oled.setCursor(104, 0); oled.print("!IMU"); }
 
   oled.setTextSize(2);
@@ -383,7 +404,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);          // lower, steadier latency
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  wifiBegin(0);
 
   Serial.printf("Distance per pulse: %.4f m\n", DIST_PER_PULSE_M);
 }

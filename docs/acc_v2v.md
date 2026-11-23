@@ -148,8 +148,9 @@ target is still). If you change the struct, change it in the `.ino`, in
 ## Bring-up
 
 1. Flash `firmware/ACC_Target_Telemetry` to the target ESP32 (Arduino IDE,
-   board *ESP32 Dev Module*, library *Adafruit SSD1306*). Set `WIFI_SSID` /
-   `WIFI_PASS` to the network the Jetson is on (e.g. the phone hotspot),
+   board *ESP32 Dev Module*, library *Adafruit SSD1306*). List one or more
+   networks in `WIFI_NETS` (the Jetson must be on the one the target joins;
+   if a network isn't reachable for `WIFI_TRY_MS` the next is tried),
    `WHEEL_DIAMETER_M` and `MAGNETS_PER_REV`. Keep the target still for ~1 s
    at power-on (IMU calibration).
 2. On the Jetson, with the minix service stopped: `cd jetson && python3 v2v.py`
