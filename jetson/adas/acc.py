@@ -239,14 +239,17 @@ class ACC:
         target = float(set_pwm)
         if self.lead:
             err = self.gap - c.ACC_GAP_CM          # + = too far
+            # integrator on gap error in BOTH modes: it finds the PWM that holds
+            # the gap even when the lead's reported speed is off (the target
+            # has no wheel encoders, so its IMU-only speed can read ~0 while
+            # it drives). In V2V the lead's speed is a floor under that, plus
+            # its acceleration as feed-forward.
+            self._integ += c.ACC_KI * err * dt
+            self._integ = max(0.0, min(float(set_pwm), self._integ))
+            ff = self._integ
             if self.mode == V2V:
-                ff = (lead_pkt["v_mps"] * c.ACC_PWM_PER_MPS
-                      + c.ACC_KA * lead_pkt["ax_mps2"])
-                self._integ = self.pwm             # keep bumpless for a switch back
-            else:
-                self._integ += c.ACC_KI * err * dt
-                self._integ = max(0.0, min(float(set_pwm), self._integ))
-                ff = self._integ
+                ff = max(ff, lead_pkt["v_mps"] * c.ACC_PWM_PER_MPS) \
+                    + c.ACC_KA * lead_pkt["ax_mps2"]
             target = ff + c.ACC_KP * err + c.ACC_KD * self.range_rate
 
             # stop on the gap predicted ACC_STOP_LOOKAHEAD_S ahead, so motor
@@ -262,8 +265,10 @@ class ACC:
                 target = 0.0
                 self._integ = min(self._integ, float(c.ACC_PWM_MIN_MOVE))
             if (self.mode == V2V and lead_pkt["v_mps"] < 0.05
-                    and self.gap < c.ACC_GAP_CM + 20):
-                target = 0.0                       # lead has stopped: stop behind it
+                    and self.gap < c.ACC_GAP_CM + 20 and self.range_rate <= 5):
+                # lead reports stopped AND the gap isn't opening: stop behind
+                # it (if the gap opens, the lead is moving whatever it reports)
+                target = 0.0
         else:
             self._held = False
             # free road (or lead beyond ultrasonic range). In V2V mode the
