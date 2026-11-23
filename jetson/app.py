@@ -18,6 +18,7 @@ from adas.aeb import AEB
 from adas.ldw import LDW
 from adas.target_detect import TargetDetector
 from camera import Camera
+from imu import IMU
 from oled_display import OLEDStatus
 from serial_link import SerialLink
 from v2v import TargetReceiver
@@ -34,6 +35,13 @@ aeb = AEB(config.AEB_WARN_CM, config.AEB_BRAKE_CM)
 oled = OLEDStatus()  # fails safe — .ok is False if the display isn't wired/detected
 v2v = TargetReceiver(config.V2V_PORT, config.V2V_CMD_PORT, config.V2V_STALE_S)  # fails safe — .ok
 acc = ACC(config)
+imu = (IMU(config.IMU_I2C_BUS, config.IMU_I2C_ADDR, config.IMU_FWD_DEG,
+           speed_max_s=config.IMU_SPEED_MAX_S)
+       if config.IMU_ENABLED else None)  # fails safe — .ok
+
+
+def imu_snap():
+    return imu.get() if imu else None
 
 speed = config.DEFAULT_SPEED
 aeb_events = 0
@@ -62,7 +70,7 @@ def acc_step(s, now, state):
     with acc_lock:
         if not acc.enabled:
             # still evaluate sensors so the UI shows camera/V2V health
-            acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target)
+            acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target, imu_snap())
             return
         if cam.detect_mode:
             acc.disengage("object detection mode")
@@ -72,7 +80,7 @@ def acc_step(s, now, state):
             acc.disengage("driver UI lost")
             link.stop()
             return
-        out = acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target)
+        out = acc.update(now, s, cam, ldw, v2v.get(), v2v.is_fresh(), speed, target, imu_snap())
 
     if out["action"] == "disengage":
         link.stop()
@@ -96,6 +104,8 @@ def adas_loop():
         s = link.snapshot()
         now = time.time()
         moving_fwd = s["l"] > 0 or s["r"] > 0
+        if imu:
+            imu.set_stationary(s["state"] in (0, 3) and s["l"] == 0 and s["r"] == 0)
         if aeb.update(s["dist"], moving_fwd):
             link.ebrake()
             aeb_events += 1
@@ -182,6 +192,7 @@ def status():
         acc=acc.status(),
         target=target.status(),
         v2v=v2v.status(),
+        imu=imu.status() if imu else {"ok": False, "error": "disabled"},
         cam_quality={k: round(v, 1) for k, v in (cam.image_quality or {}).items()},
         fps=round(cam.fps_measured, 1),
         speed=speed,

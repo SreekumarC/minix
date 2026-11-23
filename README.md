@@ -22,6 +22,7 @@ minix/
 │   │   ├── ldw.py               # lane departure warning
 │   │   └── acc.py               # adaptive cruise control (camera/ultrasonic, V2V fallback)
 │   ├── v2v.py                   # UDP receiver for the ACC target's telemetry
+│   ├── imu.py                   # ISM330DHCX ego IMU (accel / yaw rate / ego speed)
 │   ├── templates/
 │   │   └── index.html           # browser UI: video + drive buttons + status
 │   ├── static/                  # css/js for the UI, if any

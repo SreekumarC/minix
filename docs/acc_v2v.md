@@ -86,6 +86,27 @@ disengages ACC.
 **Calibrate `ACC_PWM_PER_MPS`** before relying on V2V mode: drive at a
 fixed slider value, time it over a known distance, PWM ÷ m/s.
 
+## Ego IMU (`jetson/imu.py`, optional)
+
+ISM330DHCX on the Jetson 40-pin header: VCC pin 17 (3V3), GND pin 25,
+SDA pin 27, SCL pin 28 -> I2C bus 1, address 0x6B. Mounted flat (Z up) next
+to the Arduino. Vehicle forward was measured with a nose-up tilt test
+(change X +0.019 g, Y -0.152 g) -> `IMU_FWD_DEG = -83` (board -Y, 7 deg
+skew); `imu.py` rotates into vehicle axes (a_long, a_lat, yaw + = left).
+If the board is ever remounted, repeat the tilt test and update that value.
+
+- Gravity and gyro bias are learned whenever the Arduino reports the
+  motors stopped (~1 s of standstill after boot before `calibrated`).
+- Ego speed = integrated a_long, reset to 0 at every stop; trusted only
+  `IMU_SPEED_MAX_S` after a stop (no wheel encoder, so it drifts).
+- ACC uses it for a curve speed cap (`ACC_CURVE_YAW_DPS`,
+  `ACC_CURVE_SPEED_FRAC`) and, in V2V mode, speed matching
+  (`ACC_KV_PWM_PER_MPS` x (lead speed - ego speed)).
+- Missing/unwired IMU: `.ok` False, UI shows "IMU not found", ACC behaves
+  exactly as before.
+
+Standalone check (service stopped): `~/minix-detect/bin/python jetson/imu.py`.
+
 ## Driver interaction (web UI)
 
 - **ACC: On** engages; the speed slider is the set speed.

@@ -29,6 +29,7 @@ minix/
 │   │   ├── acc.py                         # adaptive cruise control: camera/ultrasonic, V2V fallback
 │   │   └── target_detect.py               # camera detection of the learned ACC target car (classical CV)
 │   ├── v2v.py                             # UDP receiver for ACC-target telemetry (fail-safe .ok)
+│   ├── imu.py                             # ISM330DHCX ego IMU, I2C bus 1 @0x6B (fail-safe .ok)
 │   ├── templates/index.html               # the live UI (Flask looks here, not jetson/index.html)
 │   ├── static/{app.js,style.css}
 │   └── requirements.txt

@@ -20,6 +20,13 @@ V2V     (fallback) camera can't see the road/vehicles properly -> lead
                    when it has an echo; the lead's speed is used as
                    feed-forward so MiniX matches it instead of chasing
                    a differentiated ultrasonic signal.
+IMU (optional, imu.py) adds two things in any mode when it's present:
+  - curve speed cap: yaw rate above ACC_CURVE_YAW_DPS limits the request
+    to ACC_CURVE_SPEED_FRAC of set speed (the ultrasonic looks straight
+    ahead, so in a bend it can lose the lead or see a wall)
+  - V2V speed matching: lead speed (V2V) minus ego speed (IMU, valid only
+    shortly after a stop) corrects the open-loop PWM_PER_MPS feed-forward
+Without an IMU both are simply skipped.
 FAULT              camera bad AND no fresh V2V, or the Arduino link is
                    down -> ACC disengages and the car is stopped.
 
@@ -58,6 +65,8 @@ class ACC:
         self._last_dist_ts = None
         self._lanes = collections.deque()   # (t, lanes_seen or target_seen)
         self.gap_src = None        # 'ultrasonic' | 'camera' | None
+        self.imu = None            # last IMU snapshot used (status only)
+        self.curve = False
         self._held = False         # stopped behind the lead; wait for the gap to reopen
         self.target_seen = False
         self._prev_gap = None
@@ -123,7 +132,7 @@ class ACC:
         return True, "ok"
 
     # ---------- main step ----------
-    def update(self, now, snap, cam, ldw, lead_pkt, v2v_fresh, set_pwm, target=None):
+    def update(self, now, snap, cam, ldw, lead_pkt, v2v_fresh, set_pwm, target=None, imu=None):
         """One control step. Returns dict(action, pwm, decile, reason)
         where action is 'drive' | 'stop' | 'disengage'."""
         c = self.c
@@ -241,6 +250,17 @@ class ACC:
                              * c.ACC_PWM_PER_MPS)
             self._integ = self.pwm
 
+        # --- IMU refinements (skipped when imu is None) ---
+        self.imu, self.curve = imu, False
+        if imu:
+            if (self.mode == V2V and lead_pkt and imu["v_valid"]
+                    and imu["v_mps"] > 0.05 and lead_pkt["v_mps"] > 0.05
+                    and target > 0.0):
+                target += c.ACC_KV_PWM_PER_MPS * (lead_pkt["v_mps"] - imu["v_mps"])
+            if abs(imu["yaw_dps"]) > c.ACC_CURVE_YAW_DPS:
+                self.curve = True
+                target = min(target, c.ACC_CURVE_SPEED_FRAC * float(set_pwm))
+
         target = max(0.0, min(float(set_pwm), target))
 
         # rate limit: gentle accel, firmer decel (no jerks)
@@ -278,4 +298,6 @@ class ACC:
             "target_seen": self.target_seen,
             "cam_ok": self.cam_ok,
             "cam_reason": self.cam_reason,
+            "imu": self.imu is not None,
+            "curve": self.curve,
         }

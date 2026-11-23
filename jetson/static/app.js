@@ -243,6 +243,8 @@ const el = {
   accReason: document.getElementById('acc-reason'),
   v2v: document.getElementById('tt-v2v'),
   v2vVal: document.getElementById('v2v-val'),
+  imu: document.getElementById('tt-imu'),
+  imuVal: document.getElementById('imu-val'),
   events: document.getElementById('events'),
   flood: document.getElementById('flood')
 };
@@ -305,6 +307,18 @@ function apply(s) {
       !a.enabled ? '' :
       a.mode === 'v2v' ? 'caution' : 'engaged');
     el.accReason.textContent = a.reason ? 'ACC: ' + a.reason : '';
+  }
+  if (s.imu) {
+    const m = s.imu;
+    if (!m.ok) {
+      el.imuVal.textContent = 'not found';
+      el.imu.className = 'tt';
+    } else {
+      el.imuVal.textContent = (m.v_mps === null ? '-- m/s' : m.v_mps.toFixed(2) + ' m/s') +
+        '  ' + (m.a_long >= 0 ? '+' : '') + m.a_long.toFixed(1) + ' m/s²  yaw ' +
+        Math.round(m.yaw_dps) + '°/s';
+      el.imu.className = 'tt ' + (s.acc && s.acc.curve ? 'caution' : (m.calibrated ? 'good' : ''));
+    }
   }
   if (s.v2v) {
     const v = s.v2v;
