@@ -4,7 +4,8 @@
   Measurement & telemetry unit for the ACC TARGET vehicle (mecanum RC car).
   The car is driven by its stock remote. This ESP32 only MEASURES and SENDS:
 
-    - wheel speed / distance   : 2x A3144 Hall sensors (IO34 left, IO35 right)
+    - wheel speed / distance   : 2x A3144 Hall sensors (IO34 left, IO35 right) — optional,
+                                 HAS_HALL_SENSORS=false => speed from the IMU alone
     - acceleration / yaw rate  : MPU-6050 on I2C (IO21 SDA, IO22 SCL)
     - fused speed, heading, x/y position (dead reckoning)
     - battery voltage          : divider 100k/33k on IO36
@@ -43,6 +44,10 @@ IPAddress       EGO_IP(255, 255, 255, 255);
 const uint16_t  EGO_PORT = 5005;           // Jetson listens here
 const uint16_t  CMD_PORT = 5006;           // ESP32 listens here for ZERO / CAL
 
+// What is actually fitted. Set true once the parts are wired.
+const bool      HAS_HALL_SENSORS = false;  // A3144 wheel encoders on IO34/IO35
+const bool      HAS_VBAT_DIVIDER = false;  // 100k/33k divider on IO36 (VP)
+
 // Wheel encoder — MEASURE THESE on your car.
 const float     WHEEL_DIAMETER_M = 0.065f; // outer diameter over the mecanum rollers
 const uint8_t   MAGNETS_PER_REV  = 4;      // magnets glued on each hub
@@ -71,6 +76,12 @@ const uint32_t  STOP_TIMEOUT_US = 400000;  // no pulse for 0.4 s => wheel stoppe
 const float     ACC_LPF_HZ      = 10.0f;   // low-pass on accel (motor vibration)
 const float     K_WHEEL         = 0.10f;   // pull of wheel speed on fused speed per 10 ms step
 const float     STILL_ACC_MPS2  = 0.25f;   // |a| below this + wheels stopped => standstill
+// IMU-only speed (HAS_HALL_SENSORS = false): standstill is detected from the
+// absence of motor vibration. Tune STILL_VIB_MPS2 from the "vib" value on
+// Serial: parked ~0.0x, driving clearly higher.
+const float     STILL_VIB_MPS2  = 0.30f;   // vibration below this => maybe parked
+const uint32_t  STILL_HOLD_MS   = 300;     // ... for this long => parked (speed reset to 0)
+const float     V_LEAK_PER_S    = 0.05f;   // IMU-only: bleed 5 %/s of speed (bounds drift)
 // ============================================================================
 
 // Pins (wiring diagram Rev B)
@@ -236,6 +247,7 @@ float vFused = 0, axF = 0, ayF = 0, yawRateDps = 0;
 float headingRad = 0, distM = 0, posX = 0, posY = 0;
 float vL = 0, vR = 0, vbat = 0;
 bool  moving = false;
+float vib = 0;          // motor-vibration level, m/s^2
 uint32_t seq = 0;
 
 void resetOdometry() {
@@ -248,7 +260,7 @@ void resetOdometry() {
 struct __attribute__((packed)) TelemetryPkt {
   uint16_t magic;        // 0xAC01
   uint8_t  version;      // 1
-  uint8_t  flags;        // bit0 IMU ok, bit1 moving, bit2 OLED ok
+  uint8_t  flags;        // bit0 IMU ok, bit1 moving, bit2 OLED ok, bit3 speed IMU-only
   uint32_t seq;
   uint32_t t_ms;         // target's millis() at sample time
   float    v_mps;        // fused longitudinal speed (>= 0, see note on direction)
@@ -269,7 +281,7 @@ void sendTelemetry() {
   if (WiFi.status() != WL_CONNECTED || !udpStarted) return;
   TelemetryPkt p;
   p.magic = 0xAC01;  p.version = 1;
-  p.flags = (imuOk ? 1 : 0) | (moving ? 2 : 0) | (oledOk ? 4 : 0);
+  p.flags = (imuOk ? 1 : 0) | (moving ? 2 : 0) | (oledOk ? 4 : 0) | (HAS_HALL_SENSORS ? 0 : 8);
   p.seq = seq++;     p.t_ms = millis();
   p.v_mps = vFused;  p.ax_mps2 = axF;  p.ay_mps2 = ayF;
   p.yaw_rate_dps = yawRateDps;
@@ -369,7 +381,10 @@ void updateOled() {
   oled.setCursor(0, 32); oled.print(s);
   snprintf(s, sizeof(s), "x %5.2f y %5.2f", posX, posY);
   oled.setCursor(0, 42); oled.print(s);
-  snprintf(s, sizeof(s), "%4.1fV h%4.0f #%lu", vbat, headingRad * 57.2958f, (unsigned long)(seq % 100000));
+  if (HAS_VBAT_DIVIDER)
+    snprintf(s, sizeof(s), "%4.1fV h%4.0f #%lu", vbat, headingRad * 57.2958f, (unsigned long)(seq % 100000));
+  else
+    snprintf(s, sizeof(s), "IMU h%4.0f #%lu", headingRad * 57.2958f, (unsigned long)(seq % 100000));
   oled.setCursor(0, 54); oled.print(s);
   oled.display();
 }
@@ -390,8 +405,12 @@ void setup() {
   pinMode(PIN_HALL_L, INPUT);   // external pull-ups (IO34/35 have none)
   pinMode(PIN_HALL_R, INPUT);
   pinMode(PIN_MPUINT, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIN_HALL_L), isrHallL, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_HALL_R), isrHallR, FALLING);
+  if (HAS_HALL_SENSORS) {       // unconnected IO34/35 float and would fire spuriously
+    attachInterrupt(digitalPinToInterrupt(PIN_HALL_L), isrHallL, FALLING);
+    attachInterrupt(digitalPinToInterrupt(PIN_HALL_R), isrHallR, FALLING);
+  } else {
+    Serial.println("[ENC] no Hall sensors fitted — speed from IMU only");
+  }
 
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_VBAT, ADC_11db);
@@ -449,9 +468,23 @@ void loop() {
     ayF += alpha * (ayRaw - ayF);
     yawRateDps = gzDps;
 
+    // Vibration level: high-frequency part of the accel (motors running)
+    vib += 0.05f * ((fabsf(axRaw - axF) + fabsf(ayRaw - ayF)) - vib);
+
     // Standstill detection (zero-velocity update + gyro bias tracking)
-    bool wheelsStopped = (vL == 0 && vR == 0);
-    bool still = wheelsStopped && fabsf(axF) < STILL_ACC_MPS2 && fabsf(gzDps) < 2.0f;
+    bool still;
+    if (HAS_HALL_SENSORS) {
+      bool wheelsStopped = (vL == 0 && vR == 0);
+      still = wheelsStopped && fabsf(axF) < STILL_ACC_MPS2 && fabsf(gzDps) < 2.0f;
+    } else {
+      // no wheel data: parked = quiet (no motor vibration), level accel, not turning
+      static uint32_t quietSinceMs = 0;
+      bool quiet = imuOk && vib < STILL_VIB_MPS2 && fabsf(axF) < STILL_ACC_MPS2
+                   && fabsf(gzDps) < 2.0f;
+      if (!quiet) quietSinceMs = 0;
+      else if (!quietSinceMs) quietSinceMs = millis() | 1;
+      still = !imuOk || (quietSinceMs && millis() - quietSinceMs >= STILL_HOLD_MS);
+    }
     moving = !still;
 
     if (still) {
@@ -464,7 +497,8 @@ void loop() {
     } else {
       // Complementary filter: IMU gives fast response, wheels remove drift
       vFused += (imuOk ? axF : 0.0f) * dt;
-      vFused += K_WHEEL * (vWheel - vFused);
+      if (HAS_HALL_SENSORS) vFused += K_WHEEL * (vWheel - vFused);
+      else                  vFused -= V_LEAK_PER_S * vFused * dt;
       if (vFused < 0) vFused = 0;   // single-channel Hall has no direction info
     }
 
@@ -484,8 +518,19 @@ void loop() {
 
   if (nowMs - lastVbat >= VBAT_PERIOD_MS) {
     lastVbat = nowMs;
-    float vPin = analogReadMilliVolts(PIN_VBAT) / 1000.0f;
-    vbat = vPin * VBAT_DIVIDER * VBAT_CAL;
+    if (HAS_VBAT_DIVIDER) {
+      float vPin = analogReadMilliVolts(PIN_VBAT) / 1000.0f;
+      vbat = vPin * VBAT_DIVIDER * VBAT_CAL;
+    } else {
+      vbat = 0;                 // VP floating — don't show a made-up voltage
+    }
+  }
+
+  static uint32_t lastDbg = 0;
+  if (nowMs - lastDbg >= 1000) {   // 1 Hz Serial line for bench checks / tuning
+    lastDbg = nowMs;
+    Serial.printf("v %.2f m/s  ax %+.2f  ay %+.2f  yaw %+.1f dps  vib %.2f  %s\n",
+                  vFused, axF, ayF, yawRateDps, vib, moving ? "MOVING" : "parked");
   }
 
   if (nowMs - lastOled >= OLED_PERIOD_MS) {

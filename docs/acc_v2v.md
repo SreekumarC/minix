@@ -131,7 +131,7 @@ Python: `struct.unpack('<HBBII11f', data)`
 |-------|------|-------|
 | magic | u16 | `0xAC01` |
 | version | u8 | 1 |
-| flags | u8 | bit0 IMU ok, bit1 moving, bit2 OLED ok |
+| flags | u8 | bit0 IMU ok, bit1 moving, bit2 OLED ok, bit3 speed IMU-only (no Hall sensors) |
 | seq | u32 | resets on target reboot |
 | t_ms | u32 | target `millis()` |
 | v_mps | f32 | fused speed (≥ 0; single Hall has no direction) |

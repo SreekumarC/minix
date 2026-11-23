@@ -75,6 +75,7 @@ class TargetReceiver:
                 continue
             d["imu_ok"] = bool(d["flags"] & 1)
             d["moving"] = bool(d["flags"] & 2)
+            d["imu_only"] = bool(d["flags"] & 8)   # no wheel encoders: speed drifts more
             with self._lock:
                 # seq resets to 0 when the target reboots — don't count that as drops
                 if (self._last_seq is not None and d["seq"] > self._last_seq + 1
